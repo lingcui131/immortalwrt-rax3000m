@@ -16,5 +16,5 @@ PKG_2_DEST=package/new/OpenWrt-nikki
 
 PKG_3_NAME=luci-app-pcdn-detector
 PKG_3_REPO=https://github.com/Womsxd/luci-app-pcdn-detector
-PKG_3_COMMIT=b48a40de8a1315cd8f2492fb489de6c5795eed82
+PKG_3_COMMIT=851720b06d280da2e26b6bf084b0429e721933f3
 PKG_3_DEST=package/new/luci-app-pcdn-detector
