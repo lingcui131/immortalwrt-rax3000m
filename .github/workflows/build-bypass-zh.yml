@@ -8,7 +8,7 @@ permissions:
   contents: write
 concurrency:
   group: rax3000m-bypass-zh
-  cancel-in-progress: false
+  cancel-in-progress: true
 env:
   TZ: Asia/Shanghai
   CARGO_BUILD_JOBS: '2'
@@ -29,14 +29,11 @@ jobs:
           set -euxo pipefail
           git clone --depth 1 --branch 25.12 https://github.com/chasey-dev/immortalwrt-mt798x-rebase openwrt
           git clone --depth 1 https://github.com/daeuniverse/openwrt-packages dae-feed
-          DAE_VERSION=$(sed -n 's/^PKG_VERSION:=.*,[[:space:]]*\([^,)]*\))$/\1/p' dae-feed/dae/Makefile)
           HONK_TAG=$(sed -n 's/^HONK_GIT_TAG:=.*,[[:space:]]*\([^,)]*\))$/\1/p' dae-feed/honk/Makefile)
-          test -n "$DAE_VERSION"
           test -n "$HONK_TAG"
-          git clone --depth 1 --recurse-submodules --shallow-submodules --branch "v$DAE_VERSION" https://github.com/daeuniverse/dae dae-feed/dae/src
           git clone --depth 1 --branch "$HONK_TAG" https://github.com/daeuniverse/honk dae-feed/honk/src
           mkdir -p dist
-          for d in openwrt dae-feed dae-feed/dae/src dae-feed/honk/src; do
+          for d in openwrt dae-feed dae-feed/honk/src; do
             printf '%s ' "$d" >> dist/source-commits.txt
             git -C "$d" rev-parse HEAD >> dist/source-commits.txt
           done
@@ -47,13 +44,9 @@ jobs:
             find package/feeds -type l -name "$p" -delete
           done
           mkdir -p package/daeuniverse
-          for p in dae honk luci-app-dae luci-app-honk luci-lib-daeuniverse vmlinux-btf-builtin; do
+          for p in honk luci-app-honk luci-lib-daeuniverse vmlinux-btf-builtin; do
             cp -a "../dae-feed/$p" package/daeuniverse/
           done
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: dae-feed/dae/src/go.mod
-          cache: false
       - name: Prepare Rust and bpf-linker
         run: |
           set -euxo pipefail
@@ -84,9 +77,9 @@ jobs:
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
-          CONFIG_PACKAGE_dae=y
+          # CONFIG_PACKAGE_dae is not set
           CONFIG_PACKAGE_honk=y
-          CONFIG_PACKAGE_luci-app-dae=y
+          # CONFIG_PACKAGE_luci-app-dae is not set
           CONFIG_PACKAGE_luci-app-honk=y
           CONFIG_PACKAGE_luci-lib-daeuniverse=y
           CONFIG_PACKAGE_luci-i18n-daeuniverse-zh-cn=y
@@ -115,9 +108,12 @@ jobs:
           EOF
           cat ../features/10-mtwifi.configfrag >> .config
           make defconfig
-          for p in dae honk luci-app-dae luci-app-honk luci-theme-argon luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin; do
+          for p in honk luci-app-honk luci-theme-argon luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin; do
             grep -qx "CONFIG_PACKAGE_$p=y" .config || { echo "Missing required package: $p"; exit 1; }
           done
+          if grep -Eq '^CONFIG_PACKAGE_(dae|luci-app-dae)=[ym]$' .config; then
+            echo 'Unexpected dae package selected'; exit 1
+          fi
           grep -qx 'CONFIG_KERNEL_DEBUG_INFO_BTF=y' .config
           mkdir -p files/etc/uci-defaults files/etc/sysctl.d
           cat > files/etc/uci-defaults/99zz-bypass-zh <<'EOF'
@@ -155,10 +151,8 @@ jobs:
           uci set firewall.@defaults[0].flow_offloading='0'
           uci set firewall.@defaults[0].flow_offloading_hw='0'
           uci commit firewall
-          for s in dae honk; do
-            uci -q set "$s.config.enabled=0"
-            uci commit "$s"
-          done
+          uci -q set honk.config.enabled='0'
+          uci commit honk
           /etc/init.d/odhcpd disable 2>/dev/null
           exit 0
           EOF
@@ -180,23 +174,26 @@ jobs:
           manifest="${image%-sysupgrade.itb}.manifest"
           if [ ! -f "$manifest" ]; then manifest=$(find "$out" -maxdepth 1 -name '*cmcc_rax3000m*.manifest' -print -quit); fi
           test -s "$manifest"
-          for p in dae honk luci-app-dae luci-app-honk luci-i18n-daeuniverse-zh-cn luci-theme-argon; do
+          for p in honk luci-app-honk luci-i18n-daeuniverse-zh-cn luci-theme-argon; do
             grep -q "^$p - " "$manifest" || { echo "Not installed: $p"; exit 1; }
           done
+          if grep -Eq '^(dae|luci-app-dae) - ' "$manifest"; then
+            echo 'Unexpected dae package in firmware'; exit 1
+          fi
           cp "$image" "$manifest" dist/
           find "$out" -maxdepth 1 -name '*cmcc_rax3000m*recovery.itb' -exec cp '{}' dist/ \;
-          printf '%s\n' 'RAX3000M NAND Chinese bypass build' 'LAN: 192.168.0.2/24; upstream gateway and DNS: 192.168.0.1.' 'Connect LAN to LAN. DHCP server and IPv6 networking disabled.' 'Argon theme; Simplified Chinese LuCI and official daeuniverse translation.' 'dae and honk installed but stopped; configure one engine before enabling it.' 'Kernel IPv6 code may remain for dependencies; IPv6 networking is disabled at runtime.' 'No hardware boot or forwarding test has been performed.' 'Back up the router and check NAND partition/U-Boot compatibility before flashing.' 'Use a clean configuration for these defaults; retained settings can override them.' 'Set an administrator password at first login. No subscription or credentials are embedded.' 'Hardware NAT compatibility with eBPF must be tested on the device; firewall flow offload is disabled.' 'The requested blog was inaccessible; this build uses official daeuniverse packages, not a verified reproduction of that blog.' > dist/README.txt
+          printf '%s\n' 'RAX3000M NAND Chinese bypass build - honk only' 'LAN: 192.168.0.2/24; upstream gateway and DNS: 192.168.0.1.' 'Connect LAN to LAN. DHCP server and IPv6 networking disabled.' 'Argon theme; Simplified Chinese LuCI and official daeuniverse translation.' 'Only honk is installed; dae and luci-app-dae are excluded and checked absent.' 'honk is stopped by default; configure it before enabling.' 'Kernel IPv6 code may remain for dependencies; IPv6 networking is disabled at runtime.' 'No hardware boot or forwarding test has been performed.' 'Back up the router and check NAND partition/U-Boot compatibility before flashing.' 'Use a clean configuration for these defaults; retained settings can override them.' 'Set an administrator password at first login. No subscription or credentials are embedded.' 'Hardware NAT compatibility with eBPF must be tested on the device; firewall flow offload is disabled.' 'The requested blog was inaccessible; this build uses official daeuniverse packages, not a verified reproduction of that blog.' > dist/README.txt
           (cd dist && sha256sum *.itb > sha256sums)
       - uses: actions/upload-artifact@v4
         with:
-          name: rax3000m-nand-bypass-zh
+          name: rax3000m-nand-honk-only-bypass-zh
           path: dist/
           retention-days: 14
       - name: Publish separate release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: bypass-zh-${{ github.run_id }}
-          name: RAX3000M NAND Chinese Bypass ${{ github.run_number }}
+          tag_name: honk-only-bypass-zh-${{ github.run_id }}
+          name: RAX3000M NAND Honk-only Chinese Bypass ${{ github.run_number }}
           body_path: dist/README.txt
           files: dist/*
       - name: Preserve failure logs
